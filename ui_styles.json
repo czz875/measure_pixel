@@ -1,0 +1,50 @@
+{
+  "colors": {
+    "main_background": "#FAFAFA",
+    "toolbar": "#F3F2F1",
+    "toolbar_shadow": "#E1DFDD",
+    "button": "#FFFFFF",
+    "button_hover": "#E1DFDD",
+    "button_active": "#E1DFDD",
+    "text": "#323130",
+    "text_hover": "#323130",
+    "text_active": "#323130",
+    "tooltip_background": "#323130",
+    "tooltip_text": "#FFFFFF",
+    "menu_active": "#0078D4",
+    "menu_active_text": "#FFFFFF"
+  },
+  "fonts": {
+    "family": "Segoe UI",
+    "size": 11,
+    "tooltip_size": 9
+  },
+  "spacing": {
+    "button_padx": 8,
+    "button_pady": 2,
+    "button_large_padx": 8,
+    "button_large_pady": 6,
+    "group_padx": 2,
+    "toolbar_padx": 8,
+    "toolbar_pady": 6,
+    "toolbar_min_padx": 12,
+    "toolbar_base_padx": 24,
+    "status_padx": 8,
+    "status_pady": 6,
+    "tooltip_padx": 8,
+    "tooltip_pady": 4
+  },
+  "sizes": {
+    "button_width": 4,
+    "button_height": 23,
+    "button_large_height": 68,
+    "toolbar_shadow_height": 1,
+    "scale_input_width": 6
+  },
+  "scales": {
+    "min_window_width": 600,
+    "min_scale_factor": 0.6,
+    "max_scale_factor": 1.0,
+    "reference_width": 1200
+  }
+}
