@@ -24,36 +24,56 @@ class StyleManager:
             return self._get_default_styles()
     
     def _get_default_styles(self) -> Dict[str, Any]:
-        """获取默认样式"""
+        """获取默认样式（字段名与 ui_styles.json 对齐）。"""
         return {
             'colors': {
+                'main_background': '#FAFAFA',
+                'toolbar': '#F3F2F1',
+                'toolbar_shadow': '#E1DFDD',
                 'button': '#FFFFFF',
-                'button_hover': '#F5F5F5',
-                'button_active': '#E5E5E5',
-                'text': '#000000',
-                'text_active': '#000000',
-                'menu_active': '#2B579A',
+                'button_hover': '#E1DFDD',
+                'button_active': '#E1DFDD',
+                'text': '#323130',
+                'text_hover': '#323130',
+                'text_active': '#323130',
+                'tooltip_background': '#323130',
+                'tooltip_text': '#FFFFFF',
+                'menu_active': '#0078D4',
                 'menu_active_text': '#FFFFFF',
-                'tooltip_bg': '#333333',
-                'tooltip_fg': '#FFFFFF',
-                'toolbar_bg': '#F3F2F1',
-                'status_bar_bg': '#F3F2F1'
             },
             'fonts': {
-                'family': 'Arial',
-                'size': 10
-            },
-            'sizes': {
-                'button_width': 8,
-                'button_height': 32,
-                'button_large_height': 40
+                'family': 'Segoe UI',
+                'size': 11,
+                'tooltip_size': 9,
             },
             'spacing': {
-                'button_padx': 10,
-                'button_pady': 5,
-                'button_large_padx': 15,
-                'button_large_pady': 8
-            }
+                'button_padx': 8,
+                'button_pady': 2,
+                'button_large_padx': 8,
+                'button_large_pady': 6,
+                'group_padx': 2,
+                'toolbar_padx': 8,
+                'toolbar_pady': 6,
+                'toolbar_min_padx': 12,
+                'toolbar_base_padx': 24,
+                'status_padx': 8,
+                'status_pady': 6,
+                'tooltip_padx': 8,
+                'tooltip_pady': 4,
+            },
+            'sizes': {
+                'button_width': 4,
+                'button_height': 23,
+                'button_large_height': 68,
+                'toolbar_shadow_height': 1,
+                'scale_input_width': 6,
+            },
+            'scales': {
+                'min_window_width': 600,
+                'min_scale_factor': 0.6,
+                'max_scale_factor': 1.0,
+                'reference_width': 1200,
+            },
         }
     
     def get_color(self, color_name: str) -> str:

@@ -1,0 +1,58 @@
+"""核心模块的魔法值与共享常量。"""
+
+# 单位
+UNIT_PX = "px"
+UNIT_MM = "mm"
+UNIT_CM = "cm"
+UNIT_IN = "in"
+SUPPORTED_UNITS = (UNIT_PX, UNIT_MM, UNIT_CM, UNIT_IN)
+
+# 单位到像素的换算系数（1 像素 = factor 物理单位）
+UNIT_CONVERSION = {
+    UNIT_PX: 1.0,
+    UNIT_MM: 1.0 / 37.795,
+    UNIT_CM: 1.0 / 37.795 / 10.0,
+    UNIT_IN: 1.0 / 96.0,
+}
+
+# 历史栈容量
+MAX_HISTORY = 100
+
+# 缩放
+DEFAULT_SCALE = 1.0
+MIN_SCALE = 0.1
+MAX_SCALE = 5.0
+SCALE_STEP = 0.1
+
+# 绘制颜色
+COLOR_LINE_DASH = "white"
+COLOR_LINE_POINT = "red"
+COLOR_CURRENT_POINT = "blue"
+COLOR_ANGLE_DEFAULT = "#00FF00"
+COLOR_ANGLE_SELECTED = "#FFFF00"
+COLOR_ANGLE_VERTEX_HINT = "#FF00FF"
+COLOR_CIRCLE_DEFAULT = "#00FFFF"
+COLOR_CIRCLE_SELECTED = "#FF00FF"
+COLOR_RECT_DEFAULT = "#FFD700"
+COLOR_RECT_SELECTED = "#FFA500"
+COLOR_PTL_DEFAULT = "#FF1493"
+COLOR_PTL_SELECTED = "#FF69B4"
+COLOR_POLYGON_DEFAULT = "#228B22"
+COLOR_POLYGON_SELECTED = "#32CD32"
+
+# 字号
+FONT_SIZE_TEXT = 18
+FONT_SIZE_LABEL_BASE = 12
+FONT_SIZE_EXPORT = 24
+
+# 拾取容差
+PICK_TOLERANCE = 5
+
+# 图像后缀
+SAVE_SUFFIX = "_measured"
+SEGMENT_SUFFIX = "_segments.json"
+PROJECT_SUFFIX = ".project.json"
+EXPORT_SUFFIX = "_measurements.csv"
+
+# 图像扩展名
+IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff")

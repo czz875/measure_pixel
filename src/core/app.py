@@ -6,13 +6,35 @@ import math
 import csv
 import tkinter as tk
 from tkinter import filedialog, messagebox
-from PIL import Image, ImageTk, ImageDraw, ImageFont
+from PIL import Image, ImageTk
 from typing import List, Tuple, Optional, Dict
 from collections import defaultdict
 
 from src.core.models import LineSegment, AngleSegment, CircleSegment, RectangleSegment, PointToLineSegment, PolygonSegment, MeasurementData
 from src.config.settings import Config
 from src.persistence.file_handler import FileHandler
+from src.core.history import History, HistoryState, snapshot_from_app, apply_state
+from src.core.drawing import draw_annotations_on_image
+from src.core.tools import (
+    Tool,
+    switch_mode as tools_switch_mode,
+    add_point as tools_add_point,
+    finish as tools_finish,
+    current_mode as tools_current_mode,
+    get_active_label as tools_get_active_label,
+)
+from src.core.commands import (
+    export_lengths_to_csv,
+    batch_export_all,
+    build_project_data,
+    load_project_data,
+)
+from src.core.constants import (
+    UNIT_CONVERSION,
+    MIN_SCALE,
+    MAX_SCALE,
+    SCALE_STEP,
+)
 
 
 IMAGE_EXTS = ('.png', '.jpg', '.jpeg', '.bmp', '.tif', '.tiff')
@@ -63,21 +85,15 @@ class ImageMeasureApp:
         self.polygon_points = []
         self.pixels_per_unit = 100
         self.current_unit = "px"
-        self.units = ["px", "mm", "cm", "in"]
-        self.unit_conversion = {
-            "px": 1.0,
-            "mm": 1.0 / 37.795,
-            "cm": 1.0 / 37.795 / 10,
-            "in": 1.0 / 96.0
-        }
-        self.history = []
-        self.history_index = -1
-        
+        self.units = Config.get_units()
+        self.unit_conversion = dict(UNIT_CONVERSION)
+        self.history = History()
+
         self.scale_factor = 1.0
-        self.min_scale = 0.1
-        self.max_scale = 5.0
-        self.scale_step = 0.1
-        
+        self.min_scale = MIN_SCALE
+        self.max_scale = MAX_SCALE
+        self.scale_step = SCALE_STEP
+
         self.setup_ui()
         self.bind_keys()
     
@@ -422,281 +438,16 @@ class ImageMeasureApp:
         if not self.orig_image:
             return
 
+        overlay = draw_annotations_on_image(
+            self.orig_image,
+            self,
+            self.scale_factor,
+            self.get_unit_display,
+            self.calculate_angle,
+        )
         cw, ch = self.canvas.winfo_width(), self.canvas.winfo_height()
-        iw, ih = self.orig_image.size
-        scale = min(cw / iw, ch / ih, 1.0) * self.scale_factor
-        self.display_size = (int(iw * scale), int(ih * scale))
-        disp = self.orig_image.resize(self.display_size, Image.LANCZOS)
-        disp_overlay = disp.copy()
-        draw = ImageDraw.Draw(disp_overlay)
-
-        try:
-            font = ImageFont.truetype('arial.ttf', max(12, int(12*scale)))
-        except:
-            font = ImageFont.load_default()
-
-        for seg in self.all_segments:
-            if seg.image_index != self.index:
-                continue
-            scaled = [(int(x*self.display_size[0]/iw), int(y*self.display_size[1]/ih)) for x,y in seg.points]
-            for i in range(len(scaled)-1):
-                x1, y1 = scaled[i]
-                x2, y2 = scaled[i + 1]
-                length = math.hypot(x2 - x1, y2 - y1)
-
-                num_dashes = max(int(length / 10), 1)
-
-                for j in range(num_dashes):
-                    t1 = j / num_dashes
-                    t2 = (j + 0.5) / num_dashes
-                    dash_x1 = x1 + (x2 - x1) * t1
-                    dash_y1 = y1 + (y2 - y1) * t1
-                    dash_x2 = x1 + (x2 - x1) * t2
-                    dash_y2 = y1 + (y2 - y1) * t2
-                    draw.line([(dash_x1, dash_y1), (dash_x2, dash_y2)], fill='white', width=2)
-                try:
-                    font = ImageFont.truetype("arial.ttf", 18)
-                except:
-                    font = ImageFont.load_default()
-                x1, y1 = seg.points[i]
-                x2, y2 = seg.points[i+1]
-                midx = int((x1+x2)/2*self.display_size[0]/iw)
-                midy = int((y1+y2)/2*self.display_size[1]/ih)
-                length = math.hypot(x2-x1, y2-y1)
-                draw.text((midx+5, midy+5), self.get_unit_display(length), font=font, fill='white')
-            for p in scaled:
-                x, y = p
-                r = max(4, int(4*scale))
-                draw.ellipse((x-r, y-r, x+r, y+r), outline='red', width=2)
-
-        if self.current_points:
-            scaled = [(int(x*self.display_size[0]/iw), int(y*self.display_size[1]/ih)) for x,y in self.current_points]
-            for i in range(len(scaled)-1):
-                draw.line([scaled[i], scaled[i+1]], width=2, fill='blue')
-            for p in scaled:
-                x, y = p
-                r = max(3, int(3*scale))
-                draw.ellipse((x-r, y-r, x+r, y+r), outline='blue', width=2)
-
-        for angle in self.all_angles:
-            if angle.image_index != self.index:
-                continue
-            
-            vertex = (int(angle.vertex_point[0]*self.display_size[0]/iw),
-                     int(angle.vertex_point[1]*self.display_size[1]/ih))
-            p1 = (int(angle.point1[0]*self.display_size[0]/iw),
-                  int(angle.point1[1]*self.display_size[1]/ih))
-            p2 = (int(angle.point2[0]*self.display_size[0]/iw),
-                  int(angle.point2[1]*self.display_size[1]/ih))
-            
-            is_selected = (angle == self.selected_angle)
-            line_color = '#FFFF00' if is_selected else '#00FF00'
-            line_width = 3 if is_selected else 2
-            
-            draw.line([vertex, p1], fill=line_color, width=line_width)
-            draw.line([vertex, p2], fill=line_color, width=line_width)
-            
-            r = max(4, int(4*scale))
-            draw.ellipse((vertex[0]-r, vertex[1]-r, vertex[0]+r, vertex[1]+r), 
-                        outline=line_color, width=line_width)
-            
-            angle_value = self.calculate_angle(angle.vertex_point, angle.point1, angle.point2)
-            try:
-                font = ImageFont.truetype("arial.ttf", max(12, int(12*scale)))
-            except:
-                font = ImageFont.load_default()
-            
-            draw.text((vertex[0]+10, vertex[1]-20), f"{angle_value:.1f}°", 
-                     font=font, fill=line_color)
-
-        if self.angle_mode and self.angle_points:
-            scaled = [(int(x*self.display_size[0]/iw), int(y*self.display_size[1]/ih)) 
-                     for x,y in self.angle_points]
-            for i, p in enumerate(scaled):
-                r = max(4, int(4*scale))
-                color = '#FF00FF' if i == 0 else '#FFFF00'
-                draw.ellipse((p[0]-r, p[1]-r, p[0]+r, p[1]+r), outline=color, width=2)
-                
-                if i > 0:
-                    draw.line([scaled[0], p], fill='#FF00FF', width=2)
-
-        for circle in self.all_circles:
-            if circle.image_index != self.index:
-                continue
-            
-            center = (int(circle.center[0]*self.display_size[0]/iw),
-                     int(circle.center[1]*self.display_size[1]/ih))
-            radius_point = (int(circle.radius_point[0]*self.display_size[0]/iw),
-                           int(circle.radius_point[1]*self.display_size[1]/ih))
-            
-            radius = int(math.hypot(radius_point[0] - center[0], radius_point[1] - center[1]))
-            is_selected = (circle == self.selected_circle)
-            line_color = '#FF00FF' if is_selected else '#00FFFF'
-            line_width = 3 if is_selected else 2
-            
-            draw.ellipse((center[0]-radius, center[1]-radius, center[0]+radius, center[1]+radius),
-                        outline=line_color, width=line_width)
-            draw.line([center, radius_point], fill=line_color, width=line_width)
-            
-            r = max(4, int(4*scale))
-            draw.ellipse((center[0]-r, center[1]-r, center[0]+r, center[1]+r), 
-                        outline=line_color, width=line_width)
-            
-            try:
-                font = ImageFont.truetype("arial.ttf", max(12, int(12*scale)))
-            except:
-                font = ImageFont.load_default()
-            
-            draw.text((center[0]+radius+5, center[1]-radius), 
-                     f"R:{self.get_unit_display(circle.radius)}", font=font, fill=line_color)
-
-        if self.circle_mode and self.circle_points:
-            scaled = [(int(x*self.display_size[0]/iw), int(y*self.display_size[1]/ih)) 
-                     for x,y in self.circle_points]
-            for i, p in enumerate(scaled):
-                r = max(4, int(4*scale))
-                color = '#FF00FF' if i == 0 else '#00FFFF'
-                draw.ellipse((p[0]-r, p[1]-r, p[0]+r, p[1]+r), outline=color, width=2)
-                
-                if len(scaled) == 2:
-                    center = scaled[0]
-                    radius_point = scaled[1]
-                    radius = int(math.hypot(radius_point[0] - center[0], radius_point[1] - center[1]))
-                    draw.ellipse((center[0]-radius, center[1]-radius, center[0]+radius, center[1]+radius),
-                                outline='#00FFFF', width=2)
-
-        for rect in self.all_rectangles:
-            if rect.image_index != self.index:
-                continue
-            
-            p1 = (int(rect.points[0][0]*self.display_size[0]/iw),
-                  int(rect.points[0][1]*self.display_size[1]/ih))
-            p2 = (int(rect.points[1][0]*self.display_size[0]/iw),
-                  int(rect.points[1][1]*self.display_size[1]/ih))
-            
-            x0, x1 = min(p1[0], p2[0]), max(p1[0], p2[0])
-            y0, y1 = min(p1[1], p2[1]), max(p1[1], p2[1])
-            
-            is_selected = (rect == self.selected_rectangle)
-            line_color = '#FFA500' if is_selected else '#FFD700'
-            line_width = 3 if is_selected else 2
-            
-            draw.rectangle([x0, y0, x1, y1], outline=line_color, width=line_width)
-            
-            r = max(4, int(4*scale))
-            for p in [p1, p2]:
-                draw.ellipse((p[0]-r, p[1]-r, p[0]+r, p[1]+r), 
-                            outline=line_color, width=line_width)
-            
-            try:
-                font = ImageFont.truetype("arial.ttf", max(12, int(12*scale)))
-            except:
-                font = ImageFont.load_default()
-            
-            draw.text((x0+5, y0-20), 
-                     f"{self.get_unit_display(rect.width)}x{self.get_unit_display(rect.height)}", 
-                     font=font, fill=line_color)
-
-        if self.rectangle_mode and self.rectangle_points:
-            scaled = [(int(x*self.display_size[0]/iw), int(y*self.display_size[1]/ih)) 
-                     for x,y in self.rectangle_points]
-            for i, p in enumerate(scaled):
-                r = max(4, int(4*scale))
-                color = '#FFA500' if i == 0 else '#FFD700'
-                draw.ellipse((p[0]-r, p[1]-r, p[0]+r, p[1]+r), outline=color, width=2)
-                
-                if len(scaled) == 2:
-                    x0, x1 = min(scaled[0][0], scaled[1][0]), max(scaled[0][0], scaled[1][0])
-                    y0, y1 = min(scaled[0][1], scaled[1][1]), max(scaled[0][1], scaled[1][1])
-                    draw.rectangle([x0, y0, x1, y1], outline='#FFD700', width=2)
-
-        for ptl in self.all_point_to_lines:
-            if ptl.image_index != self.index:
-                continue
-            
-            point = (int(ptl.point[0]*self.display_size[0]/iw),
-                    int(ptl.point[1]*self.display_size[1]/ih))
-            line_start = (int(ptl.line_start[0]*self.display_size[0]/iw),
-                         int(ptl.line_start[1]*self.display_size[1]/ih))
-            line_end = (int(ptl.line_end[0]*self.display_size[0]/iw),
-                       int(ptl.line_end[1]*self.display_size[1]/ih))
-            
-            is_selected = (ptl == self.selected_point_to_line)
-            line_color = '#FF69B4' if is_selected else '#FF1493'
-            line_width = 3 if is_selected else 2
-            
-            draw.line([line_start, line_end], fill=line_color, width=line_width)
-            
-            r = max(4, int(4*scale))
-            draw.ellipse((point[0]-r, point[1]-r, point[0]+r, point[1]+r), 
-                        outline=line_color, width=line_width)
-            
-            try:
-                font = ImageFont.truetype("arial.ttf", max(12, int(12*scale)))
-            except:
-                font = ImageFont.load_default()
-            
-            draw.text((point[0]+10, point[1]-20), 
-                     f"d:{self.get_unit_display(ptl.distance)}", 
-                     font=font, fill=line_color)
-
-        if self.point_to_line_mode and self.point_to_line_points:
-            scaled = [(int(x*self.display_size[0]/iw), int(y*self.display_size[1]/ih)) 
-                     for x,y in self.point_to_line_points]
-            for i, p in enumerate(scaled):
-                r = max(4, int(4*scale))
-                color = '#FF69B4' if i == 0 else '#FF1493'
-                draw.ellipse((p[0]-r, p[1]-r, p[0]+r, p[1]+r), outline=color, width=2)
-                
-                if len(scaled) >= 3:
-                    draw.line([scaled[1], scaled[2]], fill='#FF1493', width=2)
-
-        for polygon in self.all_polygons:
-            if polygon.image_index != self.index:
-                continue
-            
-            scaled = [(int(p[0]*self.display_size[0]/iw), int(p[1]*self.display_size[1]/ih)) 
-                     for p in polygon.points]
-            
-            is_selected = (polygon == self.selected_polygon)
-            line_color = '#32CD32' if is_selected else '#228B22'
-            line_width = 3 if is_selected else 2
-            
-            if len(scaled) >= 3:
-                draw.polygon(scaled, outline=line_color, width=line_width)
-            
-            r = max(4, int(4*scale))
-            for p in scaled:
-                draw.ellipse((p[0]-r, p[1]-r, p[0]+r, p[1]+r), 
-                            outline=line_color, width=line_width)
-            
-            try:
-                font = ImageFont.truetype("arial.ttf", max(12, int(12*scale)))
-            except:
-                font = ImageFont.load_default()
-            
-            centroid_x = sum(p[0] for p in scaled) // len(scaled)
-            centroid_y = sum(p[1] for p in scaled) // len(scaled)
-            draw.text((centroid_x+5, centroid_y-20), 
-                     f"A:{self.get_unit_display(polygon.area)}", 
-                     font=font, fill=line_color)
-
-        if self.polygon_mode and self.polygon_points:
-            scaled = [(int(x*self.display_size[0]/iw), int(y*self.display_size[1]/ih)) 
-                     for x,y in self.polygon_points]
-            for i, p in enumerate(scaled):
-                r = max(4, int(4*scale))
-                color = '#32CD32'
-                draw.ellipse((p[0]-r, p[1]-r, p[0]+r, p[1]+r), outline=color, width=2)
-                
-                if i > 0:
-                    draw.line([scaled[i-1], p], fill='#32CD32', width=2)
-                
-                if len(scaled) >= 3:
-                    draw.line([scaled[-1], scaled[0]], fill='#32CD32', width=2)
-
-        self.display_image = ImageTk.PhotoImage(disp_overlay)
-        self.canvas.create_image((cw//2, ch//2), image=self.display_image, anchor='center')
+        self.display_image = ImageTk.PhotoImage(overlay)
+        self.canvas.create_image((cw // 2, ch // 2), image=self.display_image, anchor='center')
 
     def image_coord_from_canvas(self, cx, cy):
         if not self.orig_image:
@@ -1132,73 +883,27 @@ class ImageMeasureApp:
         path = filedialog.asksaveasfilename(defaultextension='.csv', filetypes=[('CSV', '*.csv')])
         if not path:
             return
-
-        lengths_by_segment = defaultdict(float)
-        segment_points = {}
-        for idx, seg in enumerate(self.all_segments):
-            seg_id = idx + 1
-            pts = seg.points
-            length = sum(math.hypot(pts[i + 1][0] - pts[i][0], pts[i + 1][1] - pts[i][1]) for i in range(len(pts) - 1))
-            lengths_by_segment[seg_id] += length
-            if seg_id not in segment_points:
-                segment_points[seg_id] = (pts[0], pts[-1])
-
-        with open(path, 'w', newline='', encoding='utf-8') as f:
-            writer = csv.writer(f)
-            writer.writerow(['Image', 'Segment', 'x_start', 'y_start', 'x_end', 'y_end', 'Total_Length(px)'])
-            for seg_id, total_length in lengths_by_segment.items():
-                start, end = segment_points[seg_id]
-                img_name = os.path.basename(self.image_paths[self.all_segments[0].image_index])
-                writer.writerow([img_name, seg_id, start[0], start[1], end[0], end[1], f"{total_length:.2f}"])
-
-        messagebox.showinfo('导出成功', f'已导出 {len(lengths_by_segment)} 个线段到 {path}')
+        n = export_lengths_to_csv(self, path)
+        messagebox.showinfo('导出成功', f'已导出 {n} 个线段到 {path}')
 
     def batch_export(self):
         if not self.image_paths:
             messagebox.showinfo('提示', '请先打开图片')
             return
-
         path = filedialog.asksaveasfilename(defaultextension='.csv', filetypes=[('CSV', '*.csv')])
         if not path:
             return
-
-        with open(path, 'w', newline='', encoding='utf-8') as f:
-            writer = csv.writer(f)
-            writer.writerow(['Image', 'Segment', 'x_start', 'y_start', 'x_end', 'y_end', 'Total_Length(px)'])
-            
-            for img_idx, img_path in enumerate(self.image_paths):
-                img_name = os.path.basename(img_path)
-                segments = [s for s in self.all_segments if s.image_index == img_idx]
-                
-                for idx, seg in enumerate(segments):
-                    seg_id = idx + 1
-                    pts = seg.points
-                    length = sum(math.hypot(pts[i + 1][0] - pts[i][0], pts[i + 1][1] - pts[i][1]) for i in range(len(pts) - 1))
-                    start, end = pts[0], pts[-1]
-                    writer.writerow([img_name, seg_id, start[0], start[1], end[0], end[1], f"{length:.2f}"])
-
+        n = batch_export_all(self, path)
         messagebox.showinfo('批量导出成功', f'已导出所有测量数据到 {path}')
 
     def save_project(self):
         if not self.image_paths:
             messagebox.showinfo('提示', '请先打开图片')
             return
-
         path = filedialog.asksaveasfilename(defaultextension='.project.json', filetypes=[('Project', '*.project.json')])
         if not path:
             return
-
-        project_data = {
-            'image_paths': self.image_paths,
-            'current_index': self.index,
-            'segments': [seg.to_dict() for seg in self.all_segments],
-            'angles': [angle.to_dict() for angle in self.all_angles],
-            'circles': [circle.to_dict() for circle in self.all_circles],
-            'rectangles': [rect.to_dict() for rect in self.all_rectangles],
-            'point_to_lines': [ptl.to_dict() for ptl in self.all_point_to_lines],
-            'current_unit': self.current_unit
-        }
-
+        project_data = build_project_data(self)
         if FileHandler.save_project(path, project_data):
             messagebox.showinfo('保存成功', f'项目已保存到 {path}')
         else:
@@ -1208,66 +913,34 @@ class ImageMeasureApp:
         path = filedialog.askopenfilename(filetypes=[('Project', '*.project.json')])
         if not path:
             return
-
         project_data = FileHandler.load_project(path)
         if not project_data:
             messagebox.showerror('加载失败', '无法加载项目文件')
             return
-
-        self.image_paths = project_data.get('image_paths', [])
-        self.index = project_data.get('current_index', 0)
-        self.all_segments = [LineSegment.from_dict(seg) for seg in project_data.get('segments', [])]
-        self.all_angles = [AngleSegment.from_dict(angle) for angle in project_data.get('angles', [])]
-        self.all_circles = [CircleSegment.from_dict(circle) for circle in project_data.get('circles', [])]
-        self.all_rectangles = [RectangleSegment.from_dict(rect) for rect in project_data.get('rectangles', [])]
-        self.all_point_to_lines = [PointToLineSegment.from_dict(ptl) for ptl in project_data.get('point_to_lines', [])]
-        self.current_unit = project_data.get('current_unit', 'px')
-        self.unit_var.set(self.current_unit)
-
+        load_project_data(self, project_data)
         if self.image_paths:
             self.load_image()
-
         messagebox.showinfo('加载成功', f'项目已加载，包含 {len(self.image_paths)} 张图片')
 
     def save_state(self):
-        state = {
-            'segments': [seg.to_dict() for seg in self.all_segments],
-            'angles': [angle.to_dict() for angle in self.all_angles],
-            'circles': [circle.to_dict() for circle in self.all_circles],
-            'rectangles': [rect.to_dict() for rect in self.all_rectangles],
-            'point_to_lines': [ptl.to_dict() for ptl in self.all_point_to_lines],
-            'current_points': self.current_points,
-            'angle_points': self.angle_points,
-            'circle_points': self.circle_points,
-            'rectangle_points': self.rectangle_points,
-            'point_to_line_points': self.point_to_line_points
-        }
-        self.history = self.history[:self.history_index + 1]
-        self.history.append(state)
-        self.history_index += 1
+        self.history.push(snapshot_from_app(self))
 
     def undo(self):
-        if self.history_index > 0:
-            self.history_index -= 1
-            self.restore_state(self.history[self.history_index])
+        state = self.history.undo()
+        if state is not None:
+            apply_state(self, state)
+            self.redraw()
+            self.update_status()
 
     def redo(self):
-        if self.history_index < len(self.history) - 1:
-            self.history_index += 1
-            self.restore_state(self.history[self.history_index])
+        state = self.history.redo()
+        if state is not None:
+            apply_state(self, state)
+            self.redraw()
+            self.update_status()
 
     def restore_state(self, state):
-        self.all_segments = [LineSegment.from_dict(seg) for seg in state['segments']]
-        self.all_angles = [AngleSegment.from_dict(angle) for angle in state['angles']]
-        self.all_circles = [CircleSegment.from_dict(circle) for circle in state.get('circles', [])]
-        self.all_rectangles = [RectangleSegment.from_dict(rect) for rect in state.get('rectangles', [])]
-        self.all_point_to_lines = [PointToLineSegment.from_dict(ptl) for ptl in state.get('point_to_lines', [])]
-        self.current_points = state['current_points']
-        self.angle_points = state['angle_points']
-        self.circle_points = state.get('circle_points', [])
-        self.rectangle_points = state.get('rectangle_points', [])
-        self.point_to_line_points = state.get('point_to_line_points', [])
-        self.redraw()
+        apply_state(self, state)
 
     def zoom(self, factor):
         new_scale = self.scale_factor * factor
@@ -1326,63 +999,27 @@ class ImageMeasureApp:
         return angle
 
     def enable_length_mode(self):
-        self.angle_mode = False
-        self.circle_mode = False
-        self.rectangle_mode = False
-        self.point_to_line_mode = False
-        self.polygon_mode = False
-        self.angle_points = []
-        self.measure_btn.set_active_menu_item('测量距离')
+        tools_switch_mode(self, Tool.LENGTH, self.measure_btn, tools_get_active_label(Tool.LENGTH))
         self.redraw()
 
     def enable_angle_mode(self):
-        self.angle_mode = True
-        self.circle_mode = False
-        self.rectangle_mode = False
-        self.point_to_line_mode = False
-        self.polygon_mode = False
-        self.angle_points = []
-        self.measure_btn.set_active_menu_item('测量角度')
+        tools_switch_mode(self, Tool.ANGLE, self.measure_btn, tools_get_active_label(Tool.ANGLE))
         self.redraw()
 
     def enable_circle_mode(self):
-        self.angle_mode = False
-        self.circle_mode = True
-        self.rectangle_mode = False
-        self.point_to_line_mode = False
-        self.polygon_mode = False
-        self.circle_points = []
-        self.measure_btn.set_active_menu_item('测量圆形')
+        tools_switch_mode(self, Tool.CIRCLE, self.measure_btn, tools_get_active_label(Tool.CIRCLE))
         self.redraw()
 
     def enable_rectangle_mode(self):
-        self.angle_mode = False
-        self.circle_mode = False
-        self.rectangle_mode = True
-        self.point_to_line_mode = False
-        self.polygon_mode = False
-        self.rectangle_points = []
-        self.measure_btn.set_active_menu_item('测量矩形')
+        tools_switch_mode(self, Tool.RECTANGLE, self.measure_btn, tools_get_active_label(Tool.RECTANGLE))
         self.redraw()
 
     def enable_point_to_line_mode(self):
-        self.angle_mode = False
-        self.circle_mode = False
-        self.rectangle_mode = False
-        self.point_to_line_mode = True
-        self.polygon_mode = False
-        self.point_to_line_points = []
-        self.measure_btn.set_active_menu_item('点到线距离')
+        tools_switch_mode(self, Tool.POINT_TO_LINE, self.measure_btn, tools_get_active_label(Tool.POINT_TO_LINE))
         self.redraw()
 
     def enable_polygon_mode(self):
-        self.angle_mode = False
-        self.circle_mode = False
-        self.rectangle_mode = False
-        self.point_to_line_mode = False
-        self.polygon_mode = True
-        self.polygon_points = []
-        self.measure_btn.set_active_menu_item('多边形测面积')
+        tools_switch_mode(self, Tool.POLYGON, self.measure_btn, tools_get_active_label(Tool.POLYGON))
         self.redraw()
 
     def toggle_angle_mode(self):
@@ -1391,34 +1028,29 @@ class ImageMeasureApp:
         self.redraw()
 
     def add_angle_point(self, point):
-        if len(self.angle_points) < 3:
-            self.angle_points.append(point)
-            self.redraw()
+        tools_add_point(self, Tool.ANGLE, point)
+        self.redraw()
 
     def add_circle_point(self, point):
-        if len(self.circle_points) < 2:
-            self.circle_points.append(point)
-            self.redraw()
+        tools_add_point(self, Tool.CIRCLE, point)
+        self.redraw()
 
     def add_rectangle_point(self, point):
-        if len(self.rectangle_points) < 2:
-            self.rectangle_points.append(point)
-            self.redraw()
+        tools_add_point(self, Tool.RECTANGLE, point)
+        self.redraw()
 
     def add_point_to_line_point(self, point):
-        if len(self.point_to_line_points) < 3:
-            self.point_to_line_points.append(point)
-            self.redraw()
+        tools_add_point(self, Tool.POINT_TO_LINE, point)
+        self.redraw()
 
     def add_polygon_point(self, point):
-        self.polygon_points.append(point)
+        tools_add_point(self, Tool.POLYGON, point)
         self.redraw()
 
     def finish_polygon(self):
-        if len(self.polygon_points) >= 3:
-            polygon = PolygonSegment(self.polygon_points.copy(), self.index)
-            self._add_annotation(polygon)
-            self.polygon_points = []
+        seg = tools_finish(self, Tool.POLYGON, self.index)
+        if seg is not None:
+            self._add_annotation(seg)
             self.redraw()
 
     def cancel_polygon(self):

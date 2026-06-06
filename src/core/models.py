@@ -94,12 +94,12 @@ class CircleSegment:
     
     @classmethod
     def from_dict(cls, data):
-        """从字典创建"""
-        return cls(
-            center=tuple(data['center']),
-            radius_point=tuple(data['radius_point']),
-            image_index=data['image_index']
+        """从字典创建，兼容旧字段 point_on_circle。"""
+        center = tuple(data['center'])
+        radius_point = tuple(
+            data.get('radius_point') or data.get('point_on_circle') or (0.0, 0.0)
         )
+        return cls(center=center, radius_point=radius_point, image_index=data['image_index'])
 
 
 @dataclass
